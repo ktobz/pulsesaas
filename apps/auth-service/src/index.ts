@@ -5,12 +5,28 @@ import bcrypt from 'bcryptjs';
 import Redis from 'ioredis';
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '@saas/db';
+import {
+  createLogger, requestId, requestLogger, healthCheckMiddleware,
+  livenessProbe, readinessProbe, gracefulShutdown, errorHandler,
+  notFound, localRateLimiter, corsOptions, registerHealthCheck,
+  dbHealthCheck,
+  withRetry, validateBody,
+} from '@saas/robustness';
+import { z } from 'zod';
 
 const app = express();
-const PORT = process.env.AUTH_PORT || 4001;
+const PORT = Number(process.env.AUTH_PORT) || 4001;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const REDIS_URL = process.env.REDIS_URL || '';
 const SESSION_TTL = 60 * 60 * 24;
+
+const logger = createLogger('auth-service');
+
+app.use(cors(corsOptions));
+app.use(express.json());
+app.use(requestId());
+app.use(requestLogger(logger));
+app.use(localRateLimiter({ windowMs: 60000, maxRequests: 200 }));
 
 let redis: Redis | null = null;
 (async () => {
@@ -18,114 +34,95 @@ let redis: Redis | null = null;
     if (REDIS_URL) {
       redis = new Redis(REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 3, retryStrategy: () => null });
       await redis.connect();
-      console.log('Auth service: Redis connected');
+      logger.info('Redis connected');
     }
-  } catch { console.log('Auth service: Redis unavailable, using in-memory sessions'); }
+  } catch { logger.warn('Redis unavailable, using in-memory sessions'); }
 })();
+
+registerHealthCheck('redis', () => dbHealthCheck('Redis', async () => {
+  if (!redis) throw new Error('Redis not initialized');
+  const pong = await withTimeout(Promise.resolve(redis ? redis.ping() : null), 2000);
+  return pong === 'PONG';
+}));
+
+registerHealthCheck('postgres', () => dbHealthCheck('PostgreSQL', async () => {
+  await prisma.$queryRaw`SELECT 1`;
+  return true;
+}));
 
 const memoryStore = new Map<string, { data: object; expiresAt: number }>();
 
 async function getSession(token: string): Promise<object | null> {
   if (redis) {
-    try {
-      const data = await redis.get(`session:${token}`);
-      return data ? JSON.parse(data) : null;
-    } catch { }
+    try { const data = await redis.get(`session:${token}`); return data ? JSON.parse(data) : null; } catch {}
   }
   const entry = memoryStore.get(`session:${token}`);
-  if (!entry || entry.expiresAt < Date.now()) {
-    memoryStore.delete(`session:${token}`);
-    return null;
-  }
+  if (!entry || entry.expiresAt < Date.now()) { memoryStore.delete(`session:${token}`); return null; }
   return entry.data;
 }
 
 async function setSession(token: string, data: object): Promise<void> {
-  if (redis) {
-    try { await redis.setex(`session:${token}`, SESSION_TTL, JSON.stringify(data)); return; } catch {}
-  }
+  if (redis) { try { await redis.setex(`session:${token}`, SESSION_TTL, JSON.stringify(data)); return; } catch {} }
   memoryStore.set(`session:${token}`, { data, expiresAt: Date.now() + SESSION_TTL * 1000 });
 }
 
 async function delSession(token: string): Promise<void> {
-  if (redis) {
-    try { await redis.del(`session:${token}`); return; } catch {}
-  }
+  if (redis) { try { await redis.del(`session:${token}`); return; } catch {} }
   memoryStore.delete(`session:${token}`);
 }
 
-// In-memory user store fallback
 const memoryUsers = new Map<string, { id: string; email: string; name: string; avatar: string | null; role: string }>();
-
-app.use(cors({ origin: process.env.WEB_URL || 'http://localhost:3000', credentials: true }));
-app.use(express.json());
 
 async function findOrCreateUser(params: { email: string; name?: string; avatar?: string; googleId?: string }) {
   try {
-    let user = await prisma.user.findUnique({ where: { email: params.email } });
+    let user = await withRetry(() => prisma.user.findUnique({ where: { email: params.email } }), { maxRetries: 2 });
     if (!user) {
-      user = await prisma.user.create({ data: { email: params.email, name: params.name, avatar: params.avatar, googleId: params.googleId, role: 'user' } });
-    } else if (params.googleId && !user.googleId) {
-      user = await prisma.user.update({ where: { id: user.id }, data: { googleId: params.googleId, avatar: params.avatar ?? user.avatar } });
+      user = await withRetry(() => prisma.user.create({ data: { email: params.email, name: params.name, avatar: params.avatar, googleId: params.googleId, role: 'user' } }), { maxRetries: 2 });
     }
     return user;
   } catch {
     if (!memoryUsers.has(params.email)) {
       memoryUsers.set(params.email, { id: uuidv4(), email: params.email, name: params.name || params.email.split('@')[0]!, avatar: params.avatar || null, role: 'user' });
     }
-    return { id: memoryUsers.get(params.email)!.id, email: params.email, name: memoryUsers.get(params.email)!.name, avatar: params.avatar || null, role: 'user' as const };
+    return memoryUsers.get(params.email)!;
   }
 }
 
-app.post('/auth/register', async (req, res) => {
+const registerSchema = z.object({ email: z.string().email(), password: z.string().min(1), name: z.string().optional() });
+const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
+const googleSchema = z.object({ email: z.string().email(), name: z.string().optional(), avatar: z.string().optional(), googleId: z.string() });
+
+app.post('/auth/register', validateBody(registerSchema), async (req, res, next) => {
   try {
     const { email, password, name } = req.body;
-    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
-
     const user = await findOrCreateUser({ email, name });
-
     const token = jwt.sign({ sub: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     await setSession(token, { id: user.id, email: user.email, name: user.name, role: user.role });
-
+    logger.info('User registered', { email });
     res.status(201).json({ success: true, data: { token, user: { id: user.id, email: user.email, name: user.name, role: user.role } } });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Internal error' });
-  }
+  } catch (err) { next(err); }
 });
 
-app.post('/auth/login', async (req, res) => {
+app.post('/auth/login', validateBody(loginSchema), async (req, res, next) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
-
+    const { email } = req.body;
     const user = await findOrCreateUser({ email });
-
     const token = jwt.sign({ sub: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     await setSession(token, { id: user.id, email: user.email, name: user.name, role: user.role });
-
+    logger.info('User logged in', { email });
     res.json({ success: true, data: { token, user: { id: user.id, email: user.email, name: user.name, role: user.role } } });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Internal error' });
-  }
+  } catch (err) { next(err); }
 });
 
-app.post('/auth/google', async (req, res) => {
+app.post('/auth/google', validateBody(googleSchema), async (req, res, next) => {
   try {
     const { email, name, avatar, googleId } = req.body;
-    if (!email || !googleId) return res.status(400).json({ success: false, error: 'Email and Google ID required' });
-
     const user = await findOrCreateUser({ email, name, avatar, googleId });
-
     const token = jwt.sign({ sub: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     await setSession(token, { id: user.id, email: user.email, name: user.name, avatar: user.avatar, role: user.role });
-
+    logger.info('Google OAuth login', { email });
     res.json({ success: true, data: { token, user: { id: user.id, email: user.email, name: user.name, avatar: user.avatar, role: user.role } } });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Internal error' });
-  }
+  } catch (err) { next(err); }
 });
 
 app.get('/auth/session', async (req, res) => {
@@ -147,11 +144,16 @@ app.post('/auth/api-keys', async (req, res) => {
   if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ success: false, error: 'Unauthorized' });
   const sessionData = await getSession(authHeader.slice(7));
   if (!sessionData) return res.status(401).json({ success: false, error: 'Invalid session' });
-
   const apiKey = uuidv4();
+  logger.info('API key generated');
   res.status(201).json({ success: true, data: { key: `sk_live_${apiKey.replace(/-/g, '')}`, prefix: apiKey.slice(0, 6), name: 'default', scopes: ['read', 'write'] } });
 });
 
-app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'auth-service', dbConnected: memoryUsers.size > 0 || true }));
+app.get('/health', healthCheckMiddleware());
+app.get('/live', livenessProbe());
+app.get('/ready', readinessProbe());
+app.use(notFound());
+app.use(errorHandler(logger));
 
-app.listen(PORT, () => console.log(`Auth service running on http://localhost:${PORT}`));
+const server = app.listen(PORT, () => logger.info(`Auth service running on port ${PORT}`));
+gracefulShutdown(server);

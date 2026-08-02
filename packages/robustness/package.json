@@ -1,0 +1,21 @@
+{
+  "name": "@saas/robustness",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "express": "^4.18.3",
+    "helmet": "^7.1.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "typescript": "^5.4.0"
+  }
+}

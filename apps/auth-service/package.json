@@ -12,6 +12,7 @@
   "dependencies": {
     "@saas/db": "workspace:*",
     "@saas/rate-limiter": "workspace:*",
+    "@saas/robustness": "workspace:^",
     "@saas/shared": "workspace:*",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
