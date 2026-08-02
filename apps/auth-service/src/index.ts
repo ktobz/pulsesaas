@@ -9,8 +9,8 @@ import {
   createLogger, requestId, requestLogger, healthCheckMiddleware,
   livenessProbe, readinessProbe, gracefulShutdown, errorHandler,
   notFound, localRateLimiter, corsOptions, registerHealthCheck,
-  dbHealthCheck,
-  withRetry, validateBody,
+  dbHealthCheck, getMetrics, metricsMiddleware, metricsEndpoint,
+  webhookEndpoints, withRetry, validateBody,
 } from '@saas/robustness';
 import { z } from 'zod';
 
@@ -27,6 +27,7 @@ app.use(express.json());
 app.use(requestId());
 app.use(requestLogger(logger));
 app.use(localRateLimiter({ windowMs: 60000, maxRequests: 200 }));
+app.use(metricsMiddleware());
 
 let redis: Redis | null = null;
 (async () => {
@@ -152,6 +153,8 @@ app.post('/auth/api-keys', async (req, res) => {
 app.get('/health', healthCheckMiddleware());
 app.get('/live', livenessProbe());
 app.get('/ready', readinessProbe());
+app.get('/metrics', metricsEndpoint());
+app.use('/webhooks', webhookEndpoints());
 app.use(notFound());
 app.use(errorHandler(logger));
 

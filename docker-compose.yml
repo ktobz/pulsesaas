@@ -51,7 +51,8 @@ services:
     build:
       context: .
       dockerfile: infrastructure/docker/Dockerfile.service
-      target: builder
+      args:
+        SERVICE: auth-service
     working_dir: /app/apps/auth-service
     container_name: saas-auth
     ports:

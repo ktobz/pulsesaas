@@ -1,15 +1,29 @@
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY package.json pnpm-lock.yaml ./
+# ── Base Stage ──
+FROM node:20-alpine AS base
 RUN corepack enable && corepack prepare pnpm@8.15.0 --activate
-RUN pnpm install --frozen-lockfile --prod
-COPY . .
-RUN pnpm run build
+WORKDIR /app
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json tsconfig.base.json .npmrc ./ 
+COPY packages ./packages
+COPY apps ./apps
 
+# ── Install Dependencies ──
+FROM base AS deps
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts
+RUN pnpm install --frozen-lockfile --prod=false --ignore-scripts
+RUN cd packages/db && npx prisma generate
+
+# ── Builder ──
+FROM deps AS builder
+ARG SERVICE
+RUN pnpm run build --filter=@saas/${SERVICE}
+RUN pnpm deploy --filter=@saas/${SERVICE} --prod /app/deploy
+
+# ── Runner ──
 FROM node:20-alpine AS runner
 WORKDIR /app
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
-EXPOSE 4001
+COPY --from=builder /app/deploy ./
+
+ARG PORT=4000
+EXPOSE ${PORT}
+ENV NODE_ENV=production
 CMD ["node", "dist/index.js"]

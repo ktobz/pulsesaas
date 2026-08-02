@@ -1,11 +1,12 @@
 import type { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import express from 'express';
 
 // ── Structured Logger ──
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 interface LogEntry {
-  ts: string;
+  ts?: string;
   level: LogLevel;
   msg: string;
   reqId?: string;
@@ -335,4 +336,139 @@ export async function dbHealthCheck(name: string, ping: () => Promise<boolean>):
   } catch (err) {
     return { status: 'down', detail: `${name} unreachable: ${(err as Error).message}` };
   }
+}
+
+// ── Prometheus Metrics ──
+interface Metric {
+  name: string;
+  help: string;
+  type: 'counter' | 'gauge' | 'histogram';
+  labels: Record<string, string>;
+  value: number;
+}
+
+class MetricsRegistry {
+  private metrics: Map<string, Metric> = new Map();
+
+  counter(name: string, help: string, labels: Record<string, string> = {}) {
+    const key = `${name}:${JSON.stringify(labels)}`;
+    const existing = this.metrics.get(key);
+    if (existing) { existing.value += 1; return; }
+    this.metrics.set(key, { name, help, type: 'counter', labels, value: 1 });
+  }
+
+  gauge(name: string, value: number, help: string, labels: Record<string, string> = {}) {
+    const key = `${name}:${JSON.stringify(labels)}`;
+    this.metrics.set(key, { name, help, type: 'gauge', labels, value });
+  }
+
+  incCounter(name: string) { this.counter(name, ''); }
+
+  export(): string {
+    const lines: string[] = [];
+    const grouped = new Map<string, Metric[]>();
+
+    for (const [, m] of this.metrics) {
+      if (!grouped.has(m.name)) grouped.set(m.name, []);
+      grouped.get(m.name)!.push(m);
+    }
+
+    for (const [name, metrics] of grouped) {
+      const help = metrics[0]!.help;
+      const type = metrics[0]!.type;
+      lines.push(`# HELP ${name} ${help}`);
+      lines.push(`# TYPE ${name} ${type}`);
+      for (const m of metrics) {
+        const labelStr = Object.entries(m.labels).map(([k, v]) => `${k}="${v}"`).join(',');
+        lines.push(labelStr ? `${name}{${labelStr}} ${m.value}` : `${name} ${m.value}`);
+      }
+    }
+    return lines.join('\n') + '\n';
+  }
+}
+
+const globalMetrics = new MetricsRegistry();
+
+export function getMetrics() { return globalMetrics; }
+
+export function metricsMiddleware() {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    globalMetrics.incCounter('http_requests_total');
+    next();
+  };
+}
+
+export function metricsEndpoint() {
+  return (_req: Request, res: Response) => {
+    globalMetrics.gauge('process_uptime_seconds', process.uptime(), 'Process uptime in seconds');
+    globalMetrics.gauge('process_memory_bytes', process.memoryUsage().rss, 'Process memory RSS in bytes');
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+    res.send(globalMetrics.export());
+  };
+}
+
+// ── API Versioning Middleware ──
+export function apiVersion(prefix: string) {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    (req as any).apiVersion = prefix;
+    next();
+  };
+}
+
+// ── Webhook System ──
+interface WebhookSubscription {
+  id: string;
+  url: string;
+  events: string[];
+  secret: string;
+  active: boolean;
+  createdAt: string;
+}
+
+const webhooks: WebhookSubscription[] = [];
+
+export function registerWebhook(sub: Omit<WebhookSubscription, 'id' | 'createdAt'>): WebhookSubscription {
+  const s: WebhookSubscription = { ...sub, id: uuidv4(), createdAt: new Date().toISOString() };
+  webhooks.push(s);
+  return s;
+}
+
+export async function fireWebhook(event: string, payload: unknown): Promise<void> {
+  const matches = webhooks.filter((w) => w.active && w.events.includes(event));
+  if (matches.length === 0) return;
+
+  const results = await Promise.allSettled(
+    matches.map(async (w) => {
+      try {
+        await fetch(w.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': w.secret },
+          body: JSON.stringify({ event, payload, timestamp: new Date().toISOString() }),
+          signal: AbortSignal.timeout(10000),
+        });
+      } catch (err) {
+        console.warn(`Webhook ${w.id} failed: ${(err as Error).message}`);
+      }
+    })
+  );
+}
+
+export function webhookEndpoints() {
+  const router = express.Router();
+  router.post('/subscribe', (req, res) => {
+    const { url, events, secret } = req.body;
+    if (!url || !events) return res.status(400).json({ success: false, error: 'url and events required' });
+    const sub = registerWebhook({ url, events, secret: secret || uuidv4(), active: true });
+    res.status(201).json({ success: true, data: { id: sub.id, secret: sub.secret } });
+  });
+  router.get('/list', (_req, res) => {
+    res.json({ success: true, data: webhooks.map((w) => ({ id: w.id, url: w.url, events: w.events, active: w.active, createdAt: w.createdAt })) });
+  });
+  router.delete('/:id', (req, res) => {
+    const idx = webhooks.findIndex((w) => w.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ success: false, error: 'Not found' });
+    webhooks.splice(idx, 1);
+    res.json({ success: true, data: null });
+  });
+  return router;
 }

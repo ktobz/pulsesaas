@@ -397,6 +397,9 @@ importers:
       '@types/express':
         specifier: ^4.17.21
         version: 4.17.25
+      '@types/uuid':
+        specifier: ^9.0.7
+        version: 9.0.8
       typescript:
         specifier: ^5.4.0
         version: 5.9.3
