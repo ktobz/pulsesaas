@@ -1,0 +1,12 @@
+# Terraform variables for production
+
+environment    = "prod"
+aws_region     = "us-east-1"
+domain_name    = "myapp.com"
+db_password    = "CHANGE-ME-TO-A-STRONG-PASSWORD"
+
+# Set via: export TF_VAR_vercel_api_token="..."
+# vercel_api_token = ""
+
+# Set via: export TF_VAR_db_password="..."
+# db_password = ""

@@ -1,0 +1,62 @@
+name: Deploy to AWS ECS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/auth-service/**"
+      - "apps/notification-service/**"
+      - "apps/chat-service/**"
+      - "apps/payment-service/**"
+      - "apps/url-shortener/**"
+      - "apps/job-worker/**"
+      - "apps/vector-service/**"
+      - "packages/**"
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy-services:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - notification-service
+          - chat-service
+          - payment-service
+          - url-shortener
+          - job-worker
+          - vector-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: saas-${{ matrix.service }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f infrastructure/docker/Dockerfile.service -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG apps/${{ matrix.service }}
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Update ECS service
+        run: |
+          aws ecs update-service \
+            --cluster saas-cluster \
+            --service ${{ matrix.service }} \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}

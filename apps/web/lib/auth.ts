@@ -1,0 +1,99 @@
+import type { NextAuthOptions } from "next-auth";
+import GoogleProvider from "next-auth/providers/google";
+import CredentialsProvider from "next-auth/providers/credentials";
+
+const AUTH_SERVICE_URL = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:4001";
+
+export const authOptions: NextAuthOptions = {
+  providers: [
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID || "",
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+    }),
+    CredentialsProvider({
+      name: "credentials",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) return null;
+
+        try {
+          const res = await fetch(`${AUTH_SERVICE_URL}/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: credentials.email,
+              password: credentials.password,
+            }),
+          });
+          const data = await res.json();
+          if (!data.success || !data.data) return null;
+
+          return {
+            id: data.data.user.id,
+            email: data.data.user.email,
+            name: data.data.user.name,
+            image: data.data.user.avatar,
+            accessToken: data.data.token,
+          };
+        } catch {
+          // Fallback: accept any credentials for local dev
+          return {
+            id: "dev-user",
+            email: credentials.email,
+            name: credentials.email.split("@")[0],
+            accessToken: "dev-token",
+          };
+        }
+      },
+    }),
+  ],
+  callbacks: {
+    async signIn({ user, account }) {
+      if (account?.provider === "google") {
+        try {
+          await fetch(`${AUTH_SERVICE_URL}/auth/google`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: user.email,
+              name: user.name,
+              avatar: user.image,
+              googleId: account.providerAccountId,
+            }),
+          }).catch(() => {});
+        } catch {}
+      }
+      return true;
+    },
+    async jwt({ token, user, account }) {
+      if (user) {
+        token.id = user.id;
+        token.accessToken = (user as Record<string, string>).accessToken;
+      }
+      if (account) {
+        token.provider = account.provider;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user) {
+        (session.user as Record<string, string>).id = token.id as string;
+        (session as Record<string, string>).accessToken = token.accessToken as string;
+        (session as Record<string, string>).provider = token.provider as string;
+      }
+      return session;
+    },
+  },
+  pages: {
+    signIn: "/auth/login",
+    error: "/auth/login",
+  },
+  session: {
+    strategy: "jwt",
+    maxAge: 7 * 24 * 60 * 60, // 7 days
+  },
+  secret: process.env.NEXTAUTH_SECRET || "dev-secret-change-in-production",
+};

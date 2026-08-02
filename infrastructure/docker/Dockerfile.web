@@ -1,0 +1,17 @@
+FROM node:20-alpine AS base
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@8.15.0 --activate
+
+FROM base AS builder
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
+COPY packages ./packages
+COPY apps ./apps
+RUN pnpm install --frozen-lockfile
+RUN pnpm run build --filter=@saas/web
+RUN pnpm deploy --filter=@saas/web --prod /app/prod
+
+FROM base AS runner
+COPY --from=builder /app/prod ./
+EXPOSE 3000
+ENV NODE_ENV=production
+CMD ["node", "node_modules/.bin/next", "start"]

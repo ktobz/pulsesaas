@@ -1,0 +1,14 @@
+[build]
+  command = "cd apps/web && npx next build"
+  publish = "apps/web/.next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/api/:splat"
+  status = 200
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

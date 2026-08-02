@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  avatar    String?
+  googleId  String?  @unique
+  role      String   @default("user")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  apiKeys       ApiKey[]
+  notifications Notification[]
+  payments      Payment[]
+  urls          Url[]
+
+  @@map("users")
+}
+
+model ApiKey {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  name      String
+  keyHash   String    @map("key_hash")
+  keyPrefix String    @map("key_prefix")
+  scopes    String[]
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("api_keys")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  channel   String
+  template  String
+  subject   String
+  body      String
+  status    String    @default("pending")
+  meta      Json?
+  sentAt    DateTime? @map("sent_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
+model Payment {
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id")
+  stripeSessionId String    @map("stripe_session_id")
+  amount          Int
+  currency        String    @default("usd")
+  status          String    @default("pending")
+  invoiceUrl      String?   @map("invoice_url")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("payments")
+}
+
+model Url {
+  id          String    @id @default(cuid())
+  userId      String    @map("user_id")
+  originalUrl String    @map("original_url")
+  shortCode   String    @unique @map("short_code")
+  clicks      Int       @default(0)
+  expiresAt   DateTime? @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("urls")
+}
