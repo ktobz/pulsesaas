@@ -1,7 +1,10 @@
 version: "3.8"
+
 services:
+  # ── Databases ──
   postgres:
     image: postgres:16-alpine
+    container_name: saas-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -10,19 +13,225 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: saas-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
 
   mongo:
     image: mongo:7
+    container_name: saas-mongo
     ports:
       - "27017:27017"
     volumes:
       - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
+  # ── Auth Service ──
+  auth-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      target: builder
+    working_dir: /app/apps/auth-service
+    container_name: saas-auth
     ports:
-      - "6379:6379"
+      - "4001:4001"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/saas
+      - REDIS_URL=redis://redis:6379
+      - AUTH_PORT=4001
+      - JWT_SECRET=${JWT_SECRET:-prod-secret-change-me}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["node", "dist/index.js"]
+    restart: unless-stopped
+
+  # ── Notification Service ──
+  notification-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      target: builder
+    working_dir: /app/apps/notification-service
+    container_name: saas-notification
+    ports:
+      - "4002:4002"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/saas
+      - REDIS_URL=redis://redis:6379
+      - NOTIFICATION_PORT=4002
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - FROM_EMAIL=${FROM_EMAIL:-noreply@pulsesaas.com}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["node", "dist/index.js"]
+    restart: unless-stopped
+
+  # ── Job Worker (BullMQ) ──
+  job-worker:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      target: builder
+    working_dir: /app/apps/job-worker
+    container_name: saas-worker
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/saas
+      - REDIS_URL=redis://redis:6379
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - FROM_EMAIL=${FROM_EMAIL:-noreply@pulsesaas.com}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["node", "dist/index.js"]
+    restart: unless-stopped
+
+  # ── Chat Service ──
+  chat-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      target: builder
+    working_dir: /app/apps/chat-service
+    container_name: saas-chat
+    ports:
+      - "4003:4003"
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URL=mongodb://mongo:27017/saas
+      - CHAT_PORT=4003
+      - WEB_URL=http://localhost:3000
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: ["node", "dist/index.js"]
+    restart: unless-stopped
+
+  # ── Payment Service ──
+  payment-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      target: builder
+    working_dir: /app/apps/payment-service
+    container_name: saas-payment
+    ports:
+      - "4004:4004"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/saas
+      - PAYMENT_PORT=4004
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-sk_test_placeholder}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["node", "dist/index.js"]
+    restart: unless-stopped
+
+  # ── URL Shortener ──
+  url-shortener:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      target: builder
+    working_dir: /app/apps/url-shortener
+    container_name: saas-url
+    ports:
+      - "4005:4005"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/saas
+      - URL_SHORTENER_PORT=4005
+      - BASE_URL=http://localhost:4005
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["node", "dist/index.js"]
+    restart: unless-stopped
+
+  # ── Vector Service ──
+  vector-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      target: builder
+    working_dir: /app/apps/vector-service
+    container_name: saas-vector
+    ports:
+      - "4006:4006"
+    environment:
+      - NODE_ENV=production
+      - VECTOR_PORT=4006
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - PINECONE_API_KEY=${PINECONE_API_KEY:-}
+    command: ["node", "dist/index.js"]
+    restart: unless-stopped
+
+  # ── Web Frontend ──
+  web:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.web
+    container_name: saas-web
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-prod-secret}
+      - NEXTAUTH_URL=http://localhost:3000
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - NEXT_PUBLIC_AUTH_URL=http://localhost:4001
+      - NEXT_PUBLIC_NOTIFY_URL=http://localhost:4002
+      - NEXT_PUBLIC_CHAT_URL=http://localhost:4003
+      - NEXT_PUBLIC_PAYMENT_URL=http://localhost:4004
+      - NEXT_PUBLIC_URL_SHORTENER_URL=http://localhost:4005
+      - NEXT_PUBLIC_VECTOR_URL=http://localhost:4006
+    depends_on:
+      - auth-service
+      - notification-service
+      - chat-service
+      - payment-service
+      - url-shortener
+      - vector-service
+    restart: unless-stopped
 
 volumes:
   pgdata:
+  redisdata:
   mongodata:

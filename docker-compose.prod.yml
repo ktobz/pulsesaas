@@ -1,0 +1,138 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: saas
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits: { memory: 1G }
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata_prod:/data
+    deploy:
+      resources:
+        limits: { memory: 256M }
+    restart: always
+
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongodata_prod:/data/db
+    deploy:
+      resources:
+        limits: { memory: 512M }
+    restart: always
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/saas
+      - REDIS_URL=redis://redis:6379
+      - AUTH_PORT=4001
+      - JWT_SECRET=${JWT_SECRET}
+    deploy:
+      replicas: 2
+    restart: always
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/saas
+      - REDIS_URL=redis://redis:6379
+      - NOTIFICATION_PORT=4002
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - FROM_EMAIL=${FROM_EMAIL}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}
+    deploy:
+      replicas: 2
+    restart: always
+
+  job-worker:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/saas
+      - REDIS_URL=redis://redis:6379
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - FROM_EMAIL=${FROM_EMAIL}
+    deploy:
+      replicas: 1
+    restart: always
+
+  chat-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URL=mongodb://mongo:27017/saas
+      - CHAT_PORT=4003
+      - WEB_URL=${WEB_URL}
+    deploy:
+      replicas: 2
+    restart: always
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/saas
+      - PAYMENT_PORT=4004
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+    deploy:
+      replicas: 2
+    restart: always
+
+  url-shortener:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/saas
+      - URL_SHORTENER_PORT=4005
+      - BASE_URL=${BASE_URL}
+    deploy:
+      replicas: 2
+    restart: always
+
+  vector-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+    environment:
+      - NODE_ENV=production
+      - VECTOR_PORT=4006
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+    deploy:
+      replicas: 1
+    restart: always
+
+volumes:
+  pgdata_prod:
+  redisdata_prod:
+  mongodata_prod:
