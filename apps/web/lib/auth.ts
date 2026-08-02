@@ -71,7 +71,7 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user, account }) {
       if (user) {
         token.id = user.id;
-        token.accessToken = (user as Record<string, string>).accessToken;
+        token.accessToken = (user as unknown as Record<string, string>).accessToken;
       }
       if (account) {
         token.provider = account.provider;
@@ -80,9 +80,9 @@ export const authOptions: NextAuthOptions = {
     },
     async session({ session, token }) {
       if (session.user) {
-        (session.user as Record<string, string>).id = token.id as string;
-        (session as Record<string, string>).accessToken = token.accessToken as string;
-        (session as Record<string, string>).provider = token.provider as string;
+        (session.user as unknown as Record<string, string>).id = token.id as string;
+        (session as unknown as Record<string, string>).accessToken = token.accessToken as string;
+        (session as unknown as Record<string, string>).provider = token.provider as string;
       }
       return session;
     },
