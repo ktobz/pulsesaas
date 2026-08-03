@@ -55,6 +55,10 @@ app.post('/shorten', validateBody(shortenSchema), (req, res) => {
   res.status(201).json({ success: true, data: { ...url, shortUrl: `${BASE_URL}/${shortCode}` } });
 });
 
+app.get('/health', healthCheckMiddleware());
+app.get('/live', livenessProbe());
+app.get('/ready', readinessProbe());
+
 app.get('/:code', (req, res) => {
   const url = memoryUrls.find((u) => u.shortCode === req.params.code);
   if (!url) return res.status(404).json({ success: false, error: 'Not found' });
@@ -71,10 +75,6 @@ app.get('/api/urls/:code/stats', (req, res) => {
 });
 
 app.get('/api/urls', (_req, res) => res.json({ success: true, data: memoryUrls }));
-
-app.get('/health', healthCheckMiddleware());
-app.get('/live', livenessProbe());
-app.get('/ready', readinessProbe());
 app.use(notFound());
 app.use(errorHandler(logger));
 
