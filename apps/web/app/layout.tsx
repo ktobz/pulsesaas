@@ -4,8 +4,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "PulseSaaS — Production Platform",
-  description: "Notifications, Chat, Payments, URL Shortener, Google Auth, Vector DB, Rate Limiting, and more",
+  title: "CloudStack — Build Production SaaS",
+  description: "Notifications, Chat, Payments, URL Shortener, Google Auth, Vector DB, Rate Limiting — all in one platform",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -14,9 +14,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen">
         <AuthProvider>
           <NavBar />
-          <main className="max-w-7xl mx-auto px-4 sm:px-6 py-10">{children}</main>
-          <footer className="border-t border-[var(--border-subtle)] py-8 px-4 text-center text-xs text-[var(--fg-muted)]">
-            PulseSaaS &mdash; Production SaaS Platform &mdash; Built with Next.js, Node.js, Docker
+          <main className="max-w-7xl mx-auto px-5 sm:px-6 py-10">{children}</main>
+          <footer className="border-t border-[var(--border-subtle)] py-8 px-5 text-center text-xs text-[var(--fg-muted)] font-medium">
+            CloudStack &mdash; Production Infrastructure for Modern Teams
           </footer>
         </AuthProvider>
       </body>

@@ -52,19 +52,20 @@ export const authOptions: NextAuthOptions = {
   providers,
   callbacks: {
     async signIn({ user, account }) {
+      // Fire-and-forget: don't block OAuth callback on auth-service availability
       if (account?.provider === "google") {
-        try {
-          await fetch(`${AUTH_SERVICE_URL}/auth/google`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              email: user.email,
-              name: user.name,
-              avatar: user.image,
-              googleId: account.providerAccountId,
-            }),
-          }).catch(() => {});
-        } catch {}
+        Promise.resolve().then(async () => {
+          try {
+            await fetch(`${AUTH_SERVICE_URL}/auth/google`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: user.email, name: user.name, avatar: user.image,
+                googleId: account.providerAccountId,
+              }),
+            });
+          } catch {}
+        });
       }
       return true;
     },
