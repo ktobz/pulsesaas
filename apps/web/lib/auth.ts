@@ -3,53 +3,53 @@ import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 
 const AUTH_SERVICE_URL = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:4001";
+const googleClientId = process.env.GOOGLE_CLIENT_ID;
+const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+const hasGoogleCredentials = !!(googleClientId && googleClientSecret);
+
+const providers: NextAuthOptions["providers"] = [
+  CredentialsProvider({
+    name: "credentials",
+    credentials: {
+      email: { label: "Email", type: "email" },
+      password: { label: "Password", type: "password" },
+    },
+    async authorize(credentials) {
+      if (!credentials?.email || !credentials?.password) return null;
+      try {
+        const res = await fetch(`${AUTH_SERVICE_URL}/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: credentials.email, password: credentials.password }),
+        });
+        const data = await res.json();
+        if (!data.success || !data.data) return null;
+        return {
+          id: data.data.user.id, email: data.data.user.email,
+          name: data.data.user.name, image: data.data.user.avatar,
+          accessToken: data.data.token,
+        };
+      } catch {
+        return {
+          id: "dev-user", email: credentials.email,
+          name: credentials.email.split("@")[0], accessToken: "dev-token",
+        };
+      }
+    },
+  }),
+];
+
+if (hasGoogleCredentials) {
+  providers.push(
+    GoogleProvider({
+      clientId: googleClientId!,
+      clientSecret: googleClientSecret!,
+    })
+  );
+}
 
 export const authOptions: NextAuthOptions = {
-  providers: [
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID || "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-    }),
-    CredentialsProvider({
-      name: "credentials",
-      credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" },
-      },
-      async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) return null;
-
-        try {
-          const res = await fetch(`${AUTH_SERVICE_URL}/auth/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              email: credentials.email,
-              password: credentials.password,
-            }),
-          });
-          const data = await res.json();
-          if (!data.success || !data.data) return null;
-
-          return {
-            id: data.data.user.id,
-            email: data.data.user.email,
-            name: data.data.user.name,
-            image: data.data.user.avatar,
-            accessToken: data.data.token,
-          };
-        } catch {
-          // Fallback: accept any credentials for local dev
-          return {
-            id: "dev-user",
-            email: credentials.email,
-            name: credentials.email.split("@")[0],
-            accessToken: "dev-token",
-          };
-        }
-      },
-    }),
-  ],
+  providers,
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider === "google") {
